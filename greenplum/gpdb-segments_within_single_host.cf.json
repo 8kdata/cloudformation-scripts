@@ -1,0 +1,329 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Greenplum cluster within a single host",
+    "Mappings": {
+        "Constants": {
+            "UbuntuDistribution":       { "value": "trusty" },
+            "SSDRaid0MountPoint":       { "value": "/srv/data" }
+        },
+        "AMIByUbuntuDistribution": {
+            "trusty":                   { "value": "ami-6574c216" }
+        }
+    },
+    "Parameters": {
+        "InstanceType": {
+            "Type": "String",
+            "AllowedValues": [ "m3.xlarge", "m3.2xlarge", "c3.xlarge", "c3.2xlarge", "c3.4xlarge", "c3.8xlarge" ],
+            "Description": "Instance type. They should have 2x local SSD drivers, used for cluster data",
+            "Default": "m3.xlarge"
+        },
+        "KeyPairName": {
+            "Type": "AWS::EC2::KeyPair::KeyName",
+            "Description": "Name of the key pair to use for this instance"
+        },
+        "GPDBGitRepo": {
+          "Type": "String",
+          "Description": "URL for the Git Repo containing the Greenplum code to compile and install",
+          "Default": "https://github.com/greenplum-db/gpdb"
+        },
+        "GPDBGitRepoBranch": {
+          "Type": "String",
+          "Description": "Branch of the Git Repo to clone before compiling Greenplum",
+          "Default": "master"
+        },
+        "GPDBCompileExtraArgs": {
+          "Type": "String",
+          "Description": "Arguments to pass to ./configure before compiling Greenplum",
+          "Default": "--with-libxml --with-perl --with-python"
+        },
+        "GPDBSegmentSharedBuffersGB": {
+            "Type": "Number",
+            "MinValue": "1",
+            "Description": "Size (in GB) of shared_buffers for GPDB Segments",
+            "Default": "1"
+        },
+        "GPDBRunRegressionTests": {
+            "Type": "String",
+            "AllowedValues": [ "none", "installcheck-good" ],
+            "Description": "Optionally, choose to run installcheck-good or installcheck-bugbuster after cluster init",
+            "Default": "none"
+        }
+    },
+    "Resources": {
+        "GreenplumSG": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Allow SSH",
+                "SecurityGroupIngress": [
+                    { "IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "CidrIp": "0.0.0.0/0" }
+                ]
+            }
+        },
+		"GreenplumInstance": {
+            "Type": "AWS::EC2::Instance",
+            "Properties": {
+                "ImageId": { "Fn::FindInMap": [ "AMIByUbuntuDistribution", "trusty", "value" ] },
+                "InstanceType": { "Ref": "InstanceType" },
+                "SecurityGroups": [ { "Ref": "GreenplumSG" } ],
+                "KeyName": { "Ref": "KeyPairName" },
+                "Tags": [
+                    {"Key": "Name", "Value": "greenplum"}
+                ],
+                "UserData": {
+                    "Fn::Base64": {
+                        "Fn::Join": ["", [
+                            "#cloud-config", "\n",
+                            "output: {all: \">> /var/log/cloud-config.log\"}", "\n",
+                            "", "\n",
+                            "package_update: true", "\n",
+                            "package_upgrade: true", "\n",
+                            "locale: en_US.UTF-8", "\n",
+                            "timezone: UTC", "\n",
+                            "manage_etc_hosts: true", "\n",
+                            "packages:", "\n",
+                            " - python-setuptools", "\n",
+                            " - mdadm", "\n",
+                            " - python-pip", "\n",
+                            " - libffi-dev", "\n",
+                            " - libssl-dev", "\n",
+                            "", "\n",
+                            "runcmd:", "\n",
+                            " - ulimit -n 65536", "\n",
+                            " - ulimit -u 131072", "\n",
+                            " - umount /mnt", "\n",
+                            " - echo y | sudo mdadm --create --raid-devices 2 --level stripe /dev/md0 /dev/xvdb /dev/xvdc", "\n",
+                            " - pip install pyopenssl ndg-httpsclient pyasn1", "\n",
+                            " - easy_install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz", "\n",
+                            " - cfn-init -v --region ", { "Ref": "AWS::Region" }, " -s ", { "Ref": "AWS::StackId" }, " -r GreenplumInstance", "\n",
+                            " - cfn-signal -e 0 '", { "Ref" : "WaitHandle" }, "'", "\n"
+                        ]]
+                    }
+                }
+            },
+            "Metadata": {
+                "AWS::CloudFormation::Init": {
+                    "configSets": {
+                        "default": [ "limits", "install_packages", "compile_install_gp", "start_gp_cluster", "optional_regression_tests" ]
+                    },
+                    "limits": {
+                        "files": {
+                            "/etc/security/limits.d/gpdb-ubuntu.conf": {
+                                "content": {
+                                    "Fn::Join": ["", [
+                                        "ubuntu soft nofile 65536", "\n",
+                                        "ubuntu hard nofile 65536", "\n",
+                                        "ubuntu soft nproc 131072", "\n",
+                                        "ubuntu hard nproc 131072", "\n"
+                                    ]]
+                                }
+                            },
+                            "/etc/sysctl.d/10-gpdb-shm.conf": {
+                                "content": {
+                                    "Fn::Join": ["", [
+                                        "kernel.shmmax = 1099511627776", "\n",
+                                        "kernel.shmall = 1099511627776", "\n"
+                                    ]]
+                                }
+                            }
+                        }
+                    },
+                    "install_packages": {
+                        "packages": {
+                            "apt": {
+                                "git": [],
+                                "build-essential": [],
+                                "make": [],
+                                "gcc": [],
+                                "libncurses5-dev": [],
+                                "flex": [],
+                                "bison": [],
+                                "libcurl4-openssl-dev": [],
+                                "git": [],
+                                "libapr1-dev": [],
+                                "libbz2-dev": [],
+                                "libevent-dev": [],
+                                "libperl-dev": [],
+                                "libreadline6-dev": [],
+                                "libxml2-dev": [],
+                                "libyaml-dev": [],
+                                "python-dev": [],
+                                "zlib1g-dev": [],
+                                "xfsprogs": []
+                            },
+                            "python": {
+                                "epydoc": [],
+                                "paramiko": [],
+                                "PSI": ["0.3b2"],
+                                "lockfile": []
+                            }
+                        }
+                    },
+                    "compile_install_gp": {
+                        "files": {
+                            "/home/ubuntu/bin/get-compile-gpdb": {
+                                "content": {
+                                    "Fn::Join": ["", [
+                                        "#!/bin/bash", "\n",
+                                        "j=`cat /proc/cpuinfo |grep ^processor |wc -l`", "\n",
+                                        "mkdir src; cd src", "\n",
+                                        "git clone --branch $2 $1 gpdb", "\n",
+                                        "cd gpdb", "\n",
+                                        "./configure --prefix=/home/ubuntu/gpdb ", {"Ref": "GPDBCompileExtraArgs"}, "\n",
+                                        "make -j${j} install", "\n"
+                                    ]]
+                                },
+                                "mode": "000755",
+                                "owner": "ubuntu",
+                                "group": "ubuntu"
+                            }
+                        },
+                        "commands": {
+                            "a-01-fix_created_dir_permissions": {
+                                "command": "chown ubuntu:ubuntu /home/ubuntu/bin"
+                            },
+                            "a-02-fix_python_warnings": {
+                                "command": "su --login -c 'mkdir --mode=g-wx,o-wx ~/.python-eggs' ubuntu"
+                            },
+                            "a-03-get-compile-install-gpdb": {
+                                "command": "su --login -c \"/home/ubuntu/bin/get-compile-gpdb $REPO $BRANCH\" ubuntu",
+                                "env": {
+                                    "REPO": {"Ref": "GPDBGitRepo"},
+                                    "BRANCH": {"Ref": "GPDBGitRepoBranch"}
+                                }
+                            }
+                        }
+                    },
+                    "start_gp_cluster": {
+                        "files": {
+                            "/home/ubuntu/config/hostfile_gpinitsystem.template": {
+                                "content": "__HOSTNAME__",
+                                "owner": "ubuntu",
+                                "group": "ubuntu"
+                            },
+                            "/home/ubuntu/config/gpinitsystem_config.template": {
+                                "content": {
+                                    "Fn::Join": ["", [
+                                        "ARRAY_NAME=\"Greenplum\"", "\n",
+                                        "SEG_PREFIX=gpseg", "\n",
+                                        "PORT_BASE=40000", "\n",
+                                        "declare -a DATA_DIRECTORY=({{dataDir}}/primary/gpdata1 {{dataDir}}/primary/gpdata2)", "\n",
+                                        "MASTER_HOSTNAME=__HOSTNAME__", "\n",
+                                        "MASTER_DIRECTORY={{dataDir}}/master", "\n",
+                                        "MASTER_PORT=5432", "\n",
+                                        "TRUSTED_SHELL=ssh", "\n",
+                                        "CHECK_POINT_SEGMENTS=100", "\n",
+                                        "ENCODING=UNICODE", "\n",
+                                        "MACHINE_LIST_FILE=/home/ubuntu/config/hostfile_gpinitsystem", "\n",
+                                        "DATABASE_NAME=gpdb", "\n"
+                                    ]]
+                                },
+                                "context": {
+                                    "dataDir": {"Fn::FindInMap": ["Constants", "SSDRaid0MountPoint", "value"]}
+                                },
+                                "owner": "ubuntu",
+                                "group": "ubuntu"
+                            },
+                            "/home/ubuntu/bin/recreate_gp_cluster": {
+                                "content": {
+                                    "Fn::Join": ["", [
+                                        "#!/bin/bash", "\n",
+                                        "HOSTNAME=`ec2metadata --local-hostname |cut -d. -f 1`", "\n",
+                                        "SHARED_BUFFERS={{shared_buffers_gb}}GB", "\n",
+                                        "source /home/ubuntu/gpdb/greenplum_path.sh", "\n",
+                                        "gpssh-exkeys -h $HOSTNAME", "\n",
+                                        "sed \"s/__HOSTNAME__/$HOSTNAME/\" /home/ubuntu/config/gpinitsystem_config.template > /home/ubuntu/config/gpinitsystem_config", "\n",
+                                        "sed \"s/__HOSTNAME__/$HOSTNAME/\" /home/ubuntu/config/hostfile_gpinitsystem.template > /home/ubuntu/config/hostfile_gpinitsystem", "\n",
+                                        "rm -rf {{dataDir}}/{master,primary}", "\n",
+                                        "mkdir -p {{dataDir}}/{master,primary/gpdata1,primary/gpdata2}", "\n",
+                                        "gpinitsystem -c /home/ubuntu/config/gpinitsystem_config --shared_buffers=$SHARED_BUFFERS --locale=en_US.utf8 -a", "\n"
+                                    ]]
+                                },
+                                "context": {
+                                    "dataDir": {"Fn::FindInMap": ["Constants", "SSDRaid0MountPoint", "value"]},
+                                    "shared_buffers_gb": {"Ref": "GPDBSegmentSharedBuffersGB"}
+                                },
+                                "mode": "000755",
+                                "owner": "ubuntu",
+                                "group": "ubuntu"
+                            },
+                            "/home/ubuntu/.bashrc-gpdb": {
+                                "content": {
+                                    "Fn::Join": ["", [
+                                        "export MASTER_DATA_DIRECTORY={{dataDir}}/master/gpseg-1", "\n",
+                                        "source /home/ubuntu/gpdb/greenplum_path.sh", "\n"
+                                    ]]
+                                },
+                                "context": {
+                                    "dataDir": {"Fn::FindInMap": ["Constants", "SSDRaid0MountPoint", "value"]}
+                                },
+                                "owner": "ubuntu",
+                                "group": "ubuntu"
+                            }
+                        },
+                        "commands": {
+                            "b-01-format_data_dir": {
+                                "command": "mkfs.xfs /dev/md0"
+                            },
+                            "b-02-create_data_dir": {
+                                "command": "mkdir $DATADIR",
+                                "env": { "DATADIR": {"Fn::FindInMap": ["Constants", "SSDRaid0MountPoint", "value"]} }
+                            },
+                            "b-03-mount_data_dir": {
+                                "command": "mount -o noatime,inode64,allocsize=16m /dev/md0 $DATADIR",
+                                "env": { "DATADIR": {"Fn::FindInMap": ["Constants", "SSDRaid0MountPoint", "value"]} }
+                            },
+                            "b-04-fix_data_dir_ownership": {
+                                "command": "chown ubuntu:ubuntu $DATADIR",
+                                "env": { "DATADIR": {"Fn::FindInMap": ["Constants", "SSDRaid0MountPoint", "value"]} }
+                            },
+                            "b-05-sysctl": {
+                                "command": "sysctl --system"
+                            },
+                            "b-06-disable_thp": {
+                                "command": "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
+                            },
+                            "b-07-fix_created_dir_permissions": {
+                                "command": "chown ubuntu:ubuntu /home/ubuntu/config"
+                            },
+                            "b-08-gpinitsystem": {
+                                "command": "su --login -c '/home/ubuntu/bin/recreate_gp_cluster' ubuntu"
+                            },
+                            "b-09-ubuntu_bashrc": {
+                                "command": "su --login -c 'echo \"source /home/ubuntu/.bashrc-gpdb\" >> ~/.bashrc' ubuntu"
+                            }
+                        }
+                    },
+                    "optional_regression_tests": {
+                        "commands": {
+                            "c-01-run_regressions": {
+                                "test": {"Fn::Join": ["", [
+                                    "test installcheck-good = ", {"Ref": "GPDBRunRegressionTests"}
+                                ]]},
+                                "command": "su --login -c \"(cd ~/src/gpdb && source ~/.bashrc-gpdb && make $REGRESSIONS || exit 0)\" ubuntu",
+                                "env": {
+                                    "REGRESSIONS": {"Ref": "GPDBRunRegressionTests"}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "WaitHandle": {
+            "Type": "AWS::CloudFormation::WaitConditionHandle"
+        },
+        "WaitCondition" : {
+            "Type": "AWS::CloudFormation::WaitCondition",
+            "Properties": {
+                "Handle": {"Ref": "WaitHandle"},
+                "Timeout": "7200"
+            }
+        }
+    },
+    "Outputs": {
+        "ServerPublicIp": {
+            "Description": "Public Ip",
+            "Value": { "Fn::GetAtt": [ "GreenplumInstance", "PublicIp" ] }
+        }
+    }
+}
