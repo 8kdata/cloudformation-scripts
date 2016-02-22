@@ -1,7 +1,7 @@
 # cloudformation-scripts
 
 A collection of [AWS
-Cloudformation](https://aws.amazon.com/cloudformation/) scripts to
+CloudFormation](https://aws.amazon.com/cloudformation/) scripts to
 deploy different stacks.
 
 *Important note*: while this scripts are provided as free software, and
