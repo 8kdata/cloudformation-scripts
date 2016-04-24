@@ -152,6 +152,7 @@
                             },
                             "python": {
                                 "epydoc": [],
+                                "psutil": [],
                                 "paramiko": [],
                                 "PSI": ["0.3b2"],
                                 "lockfile": []
