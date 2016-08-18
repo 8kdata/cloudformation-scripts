@@ -124,6 +124,13 @@
                                         "kernel.shmall = 1099511627776", "\n"
                                     ]]
                                 }
+                            },
+                            "/etc/sysctl.d/10-gpdb-sem.conf": {
+                                "content": {
+                                    "Fn::Join": ["", [
+                                        "kernel.sem = 250 512000 200 2048", "\n"
+                                  ]]
+                                }
                             }
                         }
                     },
