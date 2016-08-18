@@ -125,6 +125,11 @@
                                     ]]
                                 }
                             }
+                        },
+                        "commands": {
+                            "c-01-increase-semaphores": {
+                                "command": "sudo sysctl -w \"kernel.sem=250 512000 200 2048\""
+                            }
                         }
                     },
                     "install_packages": {
